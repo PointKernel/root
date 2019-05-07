@@ -21,7 +21,18 @@ if(CMAKE_SYSTEM_NAME MATCHES "Linux" AND NOT CMAKE_CROSSCOMPILING AND NOT EXISTS
   endif()
 endif()
 
-#---Check for Cocoa/Quartz graphics backend (MacOS X only)
+#---If -Dshared=Off, prefer static libraries-----------------------------------------
+if(NOT shared)
+  if(WINDOWS)
+    message(FATAL_ERROR "Option \"shared=Off\" not supported on Windows!")
+  else()
+    message("Preferring static libraries.")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a;${CMAKE_FIND_LIBRARY_SUFFIXES}")
+  endif()
+endif()
+
+
+#---Check for Cocoa/Quartz graphics backend (MacOS X only)---------------------------
 if(cocoa)
   if(APPLE)
     set(x11 OFF CACHE BOOL "Disabled because cocoa requested (${x11_description})" FORCE)
@@ -122,58 +133,20 @@ endif()
 #---Check for PCRE-------------------------------------------------------------------
 if(NOT builtin_pcre)
   message(STATUS "Looking for PCRE")
+  # Clear cache variables, or LLVM may use old values for PCRE
+  foreach(suffix FOUND INCLUDE_DIR LIBRARY LIBRARY_DEBUG LIBRARY_RELEASE)
+    unset(PCRE_${suffix} CACHE)
+  endforeach()
   find_package(PCRE)
   if(NOT PCRE_FOUND)
     message(STATUS "PCRE not found. Switching on builtin_pcre option")
     set(builtin_pcre ON CACHE BOOL "Enabled because PCRE not found (${builtin_pcre_description})" FORCE)
   endif()
 endif()
+
 if(builtin_pcre)
-  set(pcre_version 8.37)
-  message(STATUS "Building pcre version ${pcre_version} included in ROOT itself")
-  set(PCRE_LIBRARY ${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}pcre${CMAKE_STATIC_LIBRARY_SUFFIX})
-  if(WIN32)
-    if (winrtdebug)
-      set(pcre_lib pcred.lib)
-      set(pcre_build_type Debug)
-    else()
-      set(pcre_lib pcre.lib)
-      set(pcre_build_type Release)
-    endif()
-    ExternalProject_Add(
-      PCRE
-      URL ${CMAKE_SOURCE_DIR}/core/pcre/src/pcre-${pcre_version}.tar.gz
-      URL_HASH SHA256=19d490a714274a8c4c9d131f651489b8647cdb40a159e9fb7ce17ba99ef992ab
-      INSTALL_DIR ${CMAKE_BINARY_DIR}
-#      CMAKE_ARGS -G ${CMAKE_GENERATOR} -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
-      BUILD_COMMAND ${CMAKE_COMMAND} --build . --config ${pcre_build_type}
-      INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_if_different ${pcre_build_type}/${pcre_lib} ${PCRE_LIBRARY}
-              COMMAND ${CMAKE_COMMAND} -E copy_if_different pcre.h  <INSTALL_DIR>/include
-              COMMAND ${CMAKE_COMMAND} -E copy_if_different pcre_scanner.h  <INSTALL_DIR>/include
-              COMMAND ${CMAKE_COMMAND} -E copy_if_different pcre_stringpiece.h  <INSTALL_DIR>/include
-              COMMAND ${CMAKE_COMMAND} -E copy_if_different pcrecpp.h  <INSTALL_DIR>/include
-              COMMAND ${CMAKE_COMMAND} -E copy_if_different pcrecpparg.h  <INSTALL_DIR>/include
-              COMMAND ${CMAKE_COMMAND} -E copy_if_different pcreposix.h  <INSTALL_DIR>/include              
-      LOG_DOWNLOAD 1 LOG_CONFIGURE 1 LOG_BUILD 1 LOG_INSTALL 1 BUILD_IN_SOURCE 1
-      BUILD_BYPRODUCTS ${PCRE_LIBRARY})
-  else()
-    set(_pcre_cflags -O)
-    if(CMAKE_OSX_SYSROOT)
-      set(_pcre_cflags "${_pcre_cflags} -isysroot ${CMAKE_OSX_SYSROOT}")
-    endif()
-    ExternalProject_Add(
-      PCRE
-      URL ${CMAKE_SOURCE_DIR}/core/pcre/src/pcre-${pcre_version}.tar.gz
-      URL_HASH SHA256=19d490a714274a8c4c9d131f651489b8647cdb40a159e9fb7ce17ba99ef992ab
-      INSTALL_DIR ${CMAKE_BINARY_DIR}
-      CONFIGURE_COMMAND ./configure --prefix <INSTALL_DIR> --with-pic --disable-shared
-                        CC=${CMAKE_C_COMPILER} CFLAGS=${_pcre_cflags}
-      LOG_DOWNLOAD 1 LOG_CONFIGURE 1 LOG_BUILD 1 LOG_INSTALL 1 BUILD_IN_SOURCE 1
-      BUILD_BYPRODUCTS ${PCRE_LIBRARY})
-  endif()
-  set(PCRE_INCLUDE_DIR ${CMAKE_BINARY_DIR}/include)
-  set(PCRE_LIBRARIES ${PCRE_LIBRARY})
-  set(PCRE_TARGET PCRE)
+  list(APPEND ROOT_BUILTINS PCRE)
+  add_subdirectory(builtins/pcre)
 endif()
 
 #---Check for LZMA-------------------------------------------------------------------
@@ -483,24 +456,6 @@ if(python)
   endif()
 endif()
 
-#---Check for Ruby installation-------------------------------------------------------
-if(ruby)
-  message(STATUS "Looking for Ruby")
-  find_package(Ruby)
-  if(NOT RUBY_FOUND)
-    if(fail-on-missing)
-      message(FATAL_ERROR "Ruby package not found and ruby component required")
-    else()
-      message(STATUS "Ruby not found. Switching off ruby option")
-      set(ruby OFF CACHE BOOL "Disabled because Ruby not found (${ruby_description})" FORCE)
-    endif()
-  else()
-    string(REGEX REPLACE "([0-9]+).*$" "\\1" RUBY_MAJOR_VERSION "${RUBY_VERSION}")
-    string(REGEX REPLACE "[0-9]+\\.([0-9]+).*$" "\\1" RUBY_MINOR_VERSION "${RUBY_VERSION}")
-    string(REGEX REPLACE "[0-9]+\\.[0-9]+\\.([0-9]+).*$" "\\1" RUBY_PATCH_VERSION "${RUBY_VERSION}")
-  endif()
-endif()
-
 #---Check for OpenGL installation-------------------------------------------------------
 if(opengl)
   message(STATUS "Looking for OpenGL")
@@ -592,7 +547,7 @@ if(krb5)
   endif()
 endif()
 
-if(krb5 OR afs)
+if(krb5)
   find_library(COMERR_LIBRARY com_err)
   if(COMERR_LIBRARY)
     set(COMERR_LIBRARIES ${COMERR_LIBRARY})
@@ -812,18 +767,40 @@ if(fitsio OR builtin_cfitsio)
     string(REPLACE "." "" cfitsio_version_no_dots ${cfitsio_version})
     message(STATUS "Downloading and building CFITSIO version ${cfitsio_version}")
     set(CFITSIO_LIBRARIES ${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}cfitsio${CMAKE_STATIC_LIBRARY_SUFFIX})
-    ExternalProject_Add(
-      CFITSIO
-      # ftp://heasarc.gsfc.nasa.gov/software/fitsio/c/cfitsio${cfitsio_version_no_dots}.tar.gz
-      URL ${lcgpackages}/cfitsio${cfitsio_version_no_dots}.tar.gz
-      URL_HASH SHA256=de8ce3f14c2f940fadf365fcc4a4f66553dd9045ee27da249f6e2c53e95362b3
-      INSTALL_DIR ${CMAKE_BINARY_DIR}
-      CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix <INSTALL_DIR>
-      LOG_DOWNLOAD 1 LOG_CONFIGURE 1 LOG_BUILD 1 LOG_INSTALL 1
-      BUILD_IN_SOURCE 1
-      BUILD_BYPRODUCTS ${CFITSIO_LIBRARIES}
-    )
-    set(CFITSIO_INCLUDE_DIR ${CMAKE_BINARY_DIR}/include)
+    if(WIN32)
+      if(winrtdebug)
+        set(cfitsiobuild "Debug")
+      else()
+        set(cfitsiobuild "Release")
+      endif()
+      ExternalProject_Add(
+        CFITSIO
+        # ftp://heasarc.gsfc.nasa.gov/software/fitsio/c/cfitsio${cfitsio_version_no_dots}.tar.gz
+        URL http://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfit3450.zip
+        URL_HASH SHA256=1d13073967654a48d47535ff33392656f252511ddf29059d7c7dc3ce8f2a1041
+        INSTALL_DIR ${CMAKE_BINARY_DIR}
+        CMAKE_ARGS -G ${CMAKE_GENERATOR} -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --config ${cfitsiobuild}
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy ${cfitsiobuild}/cfitsio.dll <INSTALL_DIR>/bin
+                COMMAND ${CMAKE_COMMAND} -E copy ${cfitsiobuild}/cfitsio.lib <INSTALL_DIR>/lib
+        LOG_DOWNLOAD 1 LOG_CONFIGURE 1 LOG_BUILD 1 LOG_INSTALL 1 BUILD_IN_SOURCE 0
+        BUILD_BYPRODUCTS ${CFITSIO_LIBRARIES}
+      )
+      set(CFITSIO_INCLUDE_DIR ${CMAKE_BINARY_DIR}/CFITSIO-prefix/src/CFITSIO)
+    else()
+      ExternalProject_Add(
+        CFITSIO
+        # ftp://heasarc.gsfc.nasa.gov/software/fitsio/c/cfitsio${cfitsio_version_no_dots}.tar.gz
+        URL ${lcgpackages}/cfitsio${cfitsio_version_no_dots}.tar.gz
+        URL_HASH SHA256=de8ce3f14c2f940fadf365fcc4a4f66553dd9045ee27da249f6e2c53e95362b3
+        INSTALL_DIR ${CMAKE_BINARY_DIR}
+        CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix <INSTALL_DIR>
+        LOG_DOWNLOAD 1 LOG_CONFIGURE 1 LOG_BUILD 1 LOG_INSTALL 1
+        BUILD_IN_SOURCE 1
+        BUILD_BYPRODUCTS ${CFITSIO_LIBRARIES}
+      )
+      set(CFITSIO_INCLUDE_DIR ${CMAKE_BINARY_DIR}/include)
+    endif()
     set(fitsio ON CACHE BOOL "Enabled because builtin_cfitsio requested (${fitsio_description})" FORCE)
     set(CFITSIO_TARGET CFITSIO)
   else()
@@ -1485,13 +1462,13 @@ endif()
 if(tmva AND cuda AND tmva-gpu)
   message(STATUS "Looking for CUDA for optional parts of TMVA")
 
-  if(cxx11)
+  if(CMAKE_CXX_STANDARD EQUAL 11)
     find_package(CUDA 7.5)
-  elseif(cxx14)
+  elseif(CMAKE_CXX_STANDARD EQUAL 14)
     message(STATUS "Detected request for c++14, requiring minimum version CUDA 9.0 (default 7.5)")
     find_package(CUDA 9.0)
-  elseif(cxx17)
-    message(FATAL_ERROR "Using CUDA with c++17 currently not supported")
+  else()
+    message(FATAL_ERROR "CUDA not supported with C++${CMAKE_CXX_STANDARD}")
   endif()
 
   if(NOT CUDA_FOUND)
@@ -1526,7 +1503,7 @@ endif()
 if (mpi)
   message(STATUS "Looking for MPI")
   find_package(MPI)
-  if(NOT MPI_FOUND)
+  if(NOT MPI_FOUND )
     if(fail-on-missing)
       message(FATAL_ERROR "MPI not found. Ensure that the installation of MPI is in the CMAKE_PREFIX_PATH")
     else()
@@ -1617,14 +1594,14 @@ endif()
 ExternalProject_Add(
    OPENUI5
    URL ${CMAKE_SOURCE_DIR}/net/http/openui5/openui5.tar.gz
-   URL_HASH SHA256=32e50e3e8808295c67ecb7561ea9cd9beb76dd934263170fbbd05ff59b6d501d
+   URL_HASH SHA256=cbe503155fb5fc563c9dce02f4b5bf2163963b3bf118dd20756aa05d0a8693a3
    CONFIGURE_COMMAND ""
    BUILD_COMMAND ""
    INSTALL_COMMAND ""
    SOURCE_DIR ${CMAKE_BINARY_DIR}/etc/http/openui5dist)
 
 #---Report removed options---------------------------------------------------
-foreach(opt afs glite sapdb srp chirp ios)
+foreach(opt afs chirp glite ios sapdb srp ruby)
   if(${opt})
     message(FATAL_ERROR ">>> Option '${opt}' has been removed in ROOT v6.16.")
   endif()
