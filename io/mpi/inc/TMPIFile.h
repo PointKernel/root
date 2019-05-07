@@ -32,14 +32,14 @@ public:
   int argc;char** argv;
   MPI_Comm row_comm; 
   char fMPIFilename[1000];
-  Int_t fSplitLevel;
   int fColor;
 
 private:
   Int_t fEndProcess=0;
   void UpdateEndProcess(); //update how many workers reached end of job
-  MPI_Request fRequest=0; 
-  char *fSendBuf=0; //Workers' message buffer
+  MPI_Request fRequest; 
+  char *fSendBuf; //Workers' message buffer
+  Int_t fSplitLevel;
 
 
   struct ParallelFileMerger : public TObject{
@@ -86,17 +86,17 @@ private:
   void R__MigrateKey(TDirectory *destination,TDirectory *source);
   void R__DeleteObject(TDirectory *dir,Bool_t withReset);
   Bool_t R__NeedInitialMerge(TDirectory *dir); 
-  void ReceiveAndMerge(bool cache=false,MPI_Comm=0,int rank=-1,int size=0);
+  void ReceiveAndMerge(bool cache=false,MPI_Comm=0,int size=0);
   Bool_t IsCollector();
 
   //Worker Functions
-  void CreateBufferAndSend(bool cache=false,MPI_Comm comm=0);
+  void CreateBufferAndSend(MPI_Comm comm=0);
   //Empty Buffer to signal the end of job...
-  void CreateEmptyBufferAndSend(bool cache=false,MPI_Comm comm=0);
-  void Sync(bool cache=false);
+  void CreateEmptyBufferAndSend(MPI_Comm comm=0);
+  void Sync();
 
   //Finalize work and save output in disk.
-  void MPIClose(bool cache=false);
+  void MPIClose();
 
  ClassDef(TMPIFile,0)
  
